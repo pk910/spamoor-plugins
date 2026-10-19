@@ -1,0 +1,310 @@
+;;; ForsFrameAccount — EIP-8141 frame account authenticated with FORS+C.
+;;;
+;;; The account owns a chain of few-time FORS+C keys and exactly one of them is the
+;;; current owner. Every frame transaction must be shaped as
+;;;
+;;;     frame 0: VERIFY  flags=3  target=<this>   data=""      <- self_verify
+;;;     frame 1: SENDER  flags=0  target=<this>   data=rotateOwner(current, next)
+;;;     frame 2..: SENDER ...                                  <- user operations
+;;;
+;;; with the 2,448-byte FORS+C signature over TXPARAM_SIG_HASH carried as
+;;; signatures[0] (scheme ARBITRARY, empty msg). The VERIFY frame recovers the signer
+;;; through the ForsVerifier (recover(bytes,bytes32) -> address), checks that it is the
+;;; current owner, and checks that frame 1 is exactly the rotation call that replaces it
+;;; with `next`. Only then does it APPROVE execution and payment. Because VERIFY frames
+;;; run as STATICCALL, the state change happens in frame 1, which the account accepts only
+;;; from itself (caller == address, i.e. a SENDER frame).
+;;;
+;;; Storage (two slots, forever):
+;;;     slot 0     verifier address (ForsVerifier)
+;;;     slot 1     (chainIndex << 160) | owner
+;;;
+;;; The owner slot is overwritten on every rotation, so a rotation costs no state gas. The
+;;; chain index counts rotations and lets a signer find its position after a restart. A key
+;;; that was rotated out is not remembered; only the honest signer chooses `next`, and a
+;;; signer deriving keys as KDF(secret, index) never names an old one.
+;;;
+;;; Any call whose caller is neither ENTRY_POINT (0xaa) nor the account itself is a plain
+;;; call and simply succeeds, so value transfers to the account work.
+
+#pragma target "prague"
+
+#define ENTRY_POINT = 0xaa
+#define FORS_SIG_LEN = 2448
+#define SLOT_VERIFIER = 0
+#define SLOT_OWNER = 1
+#define ADDR_MASK = (1 << 160) - 1
+#define SEL_ROTATE = selector("rotateOwner(address,address)")
+#define SEL_RECOVER = selector("recover(bytes,bytes32)")
+#define ROTATE_CALLDATA_LEN = 68
+#define EV_OWNER_ROTATED = keccak256("OwnerRotated(address,address)")
+
+;; EIP-8141 introspection parameters.
+#define TXP_SIG_HASH = 0x08
+#define TXP_FRAME_COUNT = 0x09
+#define TXP_CURRENT_FRAME = 0x0a
+#define FP_TARGET = 0x00
+#define FP_MODE = 0x02
+#define FP_DATA_LENGTH = 0x04
+#define FP_ATOMIC = 0x07
+#define FP_VALUE = 0x08
+#define SIGP_LENGTH = 0x03
+#define MODE_VERIFY = 1
+#define MODE_SENDER = 2
+#define APPROVE_EXECUTION_AND_PAYMENT = 3
+
+;; The frame opcodes are not known to geas yet, so they are emitted as raw bytes.
+#define %txparam(p) {           ; [] -> [value]
+    push $p
+    #bytes 0xb0
+}
+#define %frameparam(p) {        ; [frameIndex] -> [value]
+    push $p
+    swap1
+    #bytes 0xb3
+}
+#define %framedataload(off) {   ; [frameIndex] -> [word]
+    push $off
+    #bytes 0xb1
+}
+#define %sigparam0(p) {         ; [] -> [value of signature 0]
+    push $p
+    push 0
+    #bytes 0xb4
+}
+#define %sigdatacopy0(mem, off, len) {  ; [] -> []
+    push 0
+    push $len
+    push $off
+    push $mem
+    #bytes 0xb5
+}
+#define %approve(scope) {       ; [] -> exits
+    push $scope
+    push 0
+    push 0
+    #bytes 0xaa
+}
+#define %owner {                ; [] -> [owner]   low 160 bits of slot 1
+    push SLOT_OWNER
+    sload
+    push ADDR_MASK
+    and
+}
+#define %require_address(fail) {        ; [addr] -> [addr]; fail if zero or wider than 160 bits
+    dup1
+    iszero
+    push $fail
+    jumpi
+    dup1
+    push 160
+    shr
+    push $fail
+    jumpi
+}
+
+    ;; dispatch on caller
+    caller                          ; [caller]
+    push ENTRY_POINT                ; [0xaa, caller]
+    eq                              ; [isFrame]
+    jumpi @frame_entry              ; []
+    caller                          ; [caller]
+    address                         ; [this, caller]
+    eq                              ; [isSelf]
+    jumpi @self_call                ; []
+    stop                            ; plain call: accept (value transfers etc.)
+
+;;; ---------------------------------------------------------------------------
+;;; SENDER frame: rotateOwner(address current, address next)
+;;; Only reachable with caller == address, i.e. from a SENDER frame of this account,
+;;; which in turn only exists after the VERIFY frame approved execution.
+;;; ---------------------------------------------------------------------------
+self_call:
+    calldatasize                    ; [size]
+    push ROTATE_CALLDATA_LEN        ; [68, size]
+    eq                              ; [ok]
+    iszero                          ; [!ok]
+    jumpi @fail                     ; []
+    push 0                          ; [0]
+    calldataload                    ; [word0]
+    push 224                        ; [224, word0]
+    shr                             ; [selector]
+    push SEL_ROTATE                 ; [sel, selector]
+    eq                              ; [ok]
+    iszero                          ; [!ok]
+    jumpi @fail                     ; []
+
+    push 36                         ; [36]
+    calldataload                    ; [next]
+    %require_address(@fail)         ; [next]
+    push 4                          ; [4, next]
+    calldataload                    ; [current, next]
+    %require_address(@fail)         ; [current, next]
+
+    ;; next != current
+    dup1                            ; [current, current, next]
+    dup3                            ; [next, current, current, next]
+    eq                              ; [same, current, next]
+    jumpi @fail                     ; [current, next]
+
+    ;; current must be the owner
+    push SLOT_OWNER                 ; [1, current, next]
+    sload                           ; [slot1, current, next]
+    dup1                            ; [slot1, slot1, current, next]
+    push ADDR_MASK                  ; [mask, slot1, slot1, current, next]
+    and                             ; [owner, slot1, current, next]
+    dup3                            ; [current, owner, slot1, current, next]
+    eq                              ; [ok, slot1, current, next]
+    iszero                          ; [!ok, slot1, current, next]
+    jumpi @fail                     ; [slot1, current, next]
+
+    ;; slot1 = ((index + 1) << 160) | next
+    push 160                        ; [160, slot1, current, next]
+    shr                             ; [index, current, next]
+    push 1                          ; [1, index, current, next]
+    add                             ; [index+1, current, next]
+    push 160                        ; [160, index+1, current, next]
+    shl                             ; [hi, current, next]
+    dup3                            ; [next, hi, current, next]
+    or                              ; [newSlot, current, next]
+    push SLOT_OWNER                 ; [1, newSlot, current, next]
+    sstore                          ; [current, next]
+
+    ;; emit OwnerRotated(current, next)
+    push EV_OWNER_ROTATED           ; [topic0, current, next]
+    push 0                          ; [0, topic0, current, next]
+    push 0                          ; [0, 0, topic0, current, next]
+    log3                            ; []
+    stop
+
+;;; ---------------------------------------------------------------------------
+;;; VERIFY frame (caller == ENTRY_POINT)
+;;; ---------------------------------------------------------------------------
+frame_entry:
+    %txparam(TXP_CURRENT_FRAME)     ; [cur]
+    dup1                            ; [cur, cur]
+    %frameparam(FP_MODE)            ; [mode, cur]
+    push MODE_VERIFY                ; [1, mode, cur]
+    eq                              ; [ok, cur]
+    iszero                          ; [!ok, cur]
+    jumpi @fail                     ; [cur]
+
+    ;; signatures[0] must be exactly one FORS+C blob
+    %sigparam0(SIGP_LENGTH)         ; [len, cur]
+    push FORS_SIG_LEN               ; [2448, len, cur]
+    eq                              ; [ok, cur]
+    iszero                          ; [!ok, cur]
+    jumpi @fail                     ; [cur]
+
+    ;; mem[0..0x64+2448) = abi.encodeWithSelector(recover(bytes,bytes32), sig, sigHash)
+    push SEL_RECOVER                ; [sel, cur]
+    push 224                        ; [224, sel, cur]
+    shl                             ; [sel<<224, cur]
+    push 0                          ; [0, sel<<224, cur]
+    mstore                          ; [cur]
+    push 0x40                       ; [0x40, cur]
+    push 0x04                       ; [4, 0x40, cur]
+    mstore                          ; [cur]          bytes offset
+    %txparam(TXP_SIG_HASH)          ; [sigHash, cur]
+    push 0x24                       ; [0x24, sigHash, cur]
+    mstore                          ; [cur]          digest
+    push FORS_SIG_LEN               ; [2448, cur]
+    push 0x44                       ; [0x44, 2448, cur]
+    mstore                          ; [cur]          bytes length
+    %sigdatacopy0(0x64, 0, FORS_SIG_LEN) ; [cur]     bytes payload
+
+    ;; staticcall verifier.recover(...)
+    push 0x20                       ; [retLen, cur]
+    push 0                          ; [retOff, retLen, cur]
+    push 0x64 + FORS_SIG_LEN        ; [argLen, retOff, retLen, cur]
+    push 0                          ; [argOff, argLen, retOff, retLen, cur]
+    push SLOT_VERIFIER              ; [0, argOff, argLen, retOff, retLen, cur]
+    sload                           ; [verifier, argOff, argLen, retOff, retLen, cur]
+    gas                             ; [gas, verifier, argOff, argLen, retOff, retLen, cur]
+    staticcall                      ; [ok, cur]
+    iszero                          ; [!ok, cur]
+    jumpi @fail                     ; [cur]
+    returndatasize                  ; [rds, cur]
+    push 0x20                       ; [0x20, rds, cur]
+    eq                              ; [ok, cur]
+    iszero                          ; [!ok, cur]
+    jumpi @fail                     ; [cur]
+    push 0                          ; [0, cur]
+    mload                           ; [recovered, cur]
+    %require_address(@fail)         ; [recovered, cur]
+
+    ;; recovered must be the owner
+    %owner                          ; [owner, recovered, cur]
+    dup2                            ; [recovered, owner, recovered, cur]
+    eq                              ; [ok, recovered, cur]
+    iszero                          ; [!ok, recovered, cur]
+    jumpi @fail                     ; [recovered, cur]
+
+    ;; frame cur+1 must exist and be the rotation frame
+    swap1                           ; [cur, recovered]
+    push 1                          ; [1, cur, recovered]
+    add                             ; [nxt, recovered]
+    dup1                            ; [nxt, nxt, recovered]
+    %txparam(TXP_FRAME_COUNT)       ; [count, nxt, nxt, recovered]
+    gt                              ; [count > nxt, nxt, recovered]
+    iszero                          ; [!ok, nxt, recovered]
+    jumpi @fail                     ; [nxt, recovered]
+
+    dup1                            ; [nxt, nxt, recovered]
+    %frameparam(FP_MODE)            ; [mode, nxt, recovered]
+    push MODE_SENDER                ; [2, mode, nxt, recovered]
+    eq                              ; [ok, nxt, recovered]
+    iszero                          ; [!ok, nxt, recovered]
+    jumpi @fail                     ; [nxt, recovered]
+
+    dup1                            ; [nxt, nxt, recovered]
+    %frameparam(FP_TARGET)          ; [target, nxt, recovered]
+    address                         ; [this, target, nxt, recovered]
+    eq                              ; [ok, nxt, recovered]
+    iszero                          ; [!ok, nxt, recovered]
+    jumpi @fail                     ; [nxt, recovered]
+
+    dup1                            ; [nxt, nxt, recovered]
+    %frameparam(FP_VALUE)           ; [value, nxt, recovered]
+    jumpi @fail                     ; [nxt, recovered]      value must be 0
+
+    dup1                            ; [nxt, nxt, recovered]
+    %frameparam(FP_ATOMIC)          ; [atomic, nxt, recovered]
+    jumpi @fail                     ; [nxt, recovered]      must not be batched
+
+    dup1                            ; [nxt, nxt, recovered]
+    %frameparam(FP_DATA_LENGTH)     ; [len, nxt, recovered]
+    push ROTATE_CALLDATA_LEN        ; [68, len, nxt, recovered]
+    eq                              ; [ok, nxt, recovered]
+    iszero                          ; [!ok, nxt, recovered]
+    jumpi @fail                     ; [nxt, recovered]
+
+    dup1                            ; [nxt, nxt, recovered]
+    %framedataload(0)               ; [word0, nxt, recovered]
+    push 224                        ; [224, word0, nxt, recovered]
+    shr                             ; [selector, nxt, recovered]
+    push SEL_ROTATE                 ; [sel, selector, nxt, recovered]
+    eq                              ; [ok, nxt, recovered]
+    iszero                          ; [!ok, nxt, recovered]
+    jumpi @fail                     ; [nxt, recovered]
+
+    dup1                            ; [nxt, nxt, recovered]
+    %framedataload(4)               ; [currentArg, nxt, recovered]
+    dup3                            ; [recovered, currentArg, nxt, recovered]
+    eq                              ; [ok, nxt, recovered]
+    iszero                          ; [!ok, nxt, recovered]
+    jumpi @fail                     ; [nxt, recovered]
+
+    %framedataload(36)              ; [nextOwner, recovered]
+    %require_address(@fail)         ; [nextOwner, recovered]
+    dup2                            ; [recovered, nextOwner, recovered]
+    eq                              ; [same, recovered]
+    jumpi @fail                     ; [recovered]        next must differ from current
+    pop                             ; []
+
+    %approve(APPROVE_EXECUTION_AND_PAYMENT)
+
+fail:
+    push 0
+    push 0
+    revert

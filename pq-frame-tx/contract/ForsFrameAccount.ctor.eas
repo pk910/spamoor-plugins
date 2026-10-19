@@ -1,0 +1,59 @@
+;;; Constructor for ForsFrameAccount.
+;;; initcode = <this> || <runtime> || abi.encode(address verifier, address initialOwner)
+;;; Stores the verifier in slot 0 and initialOwner (chain index 0) in slot 1, then
+;;; returns the runtime.
+
+#pragma target "prague"
+
+#define SLOT_VERIFIER = 0
+#define SLOT_OWNER = 1
+
+    ;; mem[0..64) = constructor arguments (last 64 bytes of code)
+    push 64                         ; [64]
+    dup1                            ; [64, 64]
+    codesize                        ; [cs, 64, 64]
+    sub                             ; [cs-64, 64]
+    push 0                          ; [0, cs-64, 64]
+    codecopy                        ; []
+
+    ;; slot 0 = verifier
+    push 0                          ; [0]
+    mload                           ; [verifier]
+    dup1                            ; [verifier, verifier]
+    iszero                          ; [isZero, verifier]
+    jumpi @bad                      ; [verifier]
+    dup1                            ; [verifier, verifier]
+    push 160                        ; [160, verifier, verifier]
+    shr                             ; [hi, verifier]
+    jumpi @bad                      ; [verifier]
+    push SLOT_VERIFIER              ; [0, verifier]
+    sstore                          ; []
+
+    ;; slot 1 = (0 << 160) | initialOwner
+    push 0x20                       ; [0x20]
+    mload                           ; [owner]
+    dup1                            ; [owner, owner]
+    iszero                          ; [isZero, owner]
+    jumpi @bad                      ; [owner]
+    dup1                            ; [owner, owner]
+    push 160                        ; [160, owner, owner]
+    shr                             ; [hi, owner]
+    jumpi @bad                      ; [owner]
+    push SLOT_OWNER                 ; [1, owner]
+    sstore                          ; []
+
+    ;; return runtime
+    push len(runtime)               ; [len]
+    dup1                            ; [len, len]
+    push @runtime                   ; [off, len, len]
+    push 0                          ; [0, off, len, len]
+    codecopy                        ; [len]
+    push 0                          ; [0, len]
+    return
+
+bad:
+    push 0
+    push 0
+    revert
+
+#bytes runtime: assemble("ForsFrameAccount.eas")
