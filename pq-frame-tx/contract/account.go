@@ -1,5 +1,5 @@
 // Package contract holds the bytecode of the contracts the pq-frame-tx plugin deploys and
-// the encoding helpers for talking to the FORS+C frame account.
+// the encoding helpers for talking to the frame accounts.
 package contract
 
 import (
@@ -48,6 +48,27 @@ func ForsFrameAccountInitcode(verifier, initialOwner common.Address) []byte {
 	initcode = append(initcode, common.LeftPadBytes(initialOwner.Bytes(), 32)...)
 
 	return initcode
+}
+
+// SlotSphincsKey is the SphincsFrameAccount storage slot holding PK.seed || PK.root (see
+// SphincsFrameAccount.eas).
+const SlotSphincsKey = 0
+
+// SphincsFrameAccountInitcode returns the creation bytecode of an account owned by the
+// SPHINCS public key `key` (PK.seed || PK.root).
+func SphincsFrameAccountInitcode(key common.Hash) []byte {
+	ctor := common.FromHex(SphincsFrameAccountInitcodeHex)
+
+	initcode := make([]byte, 0, len(ctor)+common.HashLength)
+	initcode = append(initcode, ctor...)
+	initcode = append(initcode, key.Bytes()...)
+
+	return initcode
+}
+
+// SphincsKeySlot is the storage key of a SphincsFrameAccount's public key.
+func SphincsKeySlot() common.Hash {
+	return common.BigToHash(big.NewInt(SlotSphincsKey))
 }
 
 // OwnerSlot is the storage key of the packed owner word.

@@ -1,0 +1,40 @@
+;;; Constructor for SphincsFrameAccount.
+;;; initcode = <this> || <runtime> || bytes32(PK.seed || PK.root)
+;;; Stores the public key in slot 0, then returns the runtime.
+
+#pragma target "prague"
+
+#define SLOT_KEY = 0
+
+    ;; mem[0..32) = constructor argument (last 32 bytes of code)
+    push 32                         ; [32]
+    dup1                            ; [32, 32]
+    codesize                        ; [cs, 32, 32]
+    sub                             ; [cs-32, 32]
+    push 0                          ; [0, cs-32, 32]
+    codecopy                        ; []
+
+    ;; slot 0 = key, which must not be zero: a zero key would match an absent frame word
+    push 0                          ; [0]
+    mload                           ; [key]
+    dup1                            ; [key, key]
+    iszero                          ; [isZero, key]
+    jumpi @bad                      ; [key]
+    push SLOT_KEY                   ; [0, key]
+    sstore                          ; []
+
+    ;; return runtime
+    push len(runtime)               ; [len]
+    dup1                            ; [len, len]
+    push @runtime                   ; [off, len, len]
+    push 0                          ; [0, off, len, len]
+    codecopy                        ; [len]
+    push 0                          ; [0, len]
+    return
+
+bad:
+    push 0
+    push 0
+    revert
+
+#bytes runtime: assemble("SphincsFrameAccount.eas")

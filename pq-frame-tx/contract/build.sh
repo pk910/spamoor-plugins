@@ -4,6 +4,7 @@
 #   ForsVerifier.sol          solc 0.8.30, via-ir, optimizer 200 runs, evm cancun
 #   TestToken.sol             solc 0.8.30, optimizer 200 runs
 #   ForsFrameAccount*.eas     geas (github.com/fjl/geas)
+#   SphincsFrameAccount*.eas  geas
 #
 # Needs docker (ethereum/solc image) or a `solc` binary of the right version in PATH, jq,
 # and geas (or Go, which runs it via `go run`).
@@ -54,6 +55,10 @@ echo "assembling ForsFrameAccount"
 account_initcode=$(geas_bin ForsFrameAccount.ctor.eas)
 account_runtime=$(geas_bin ForsFrameAccount.eas)
 
+echo "assembling SphincsFrameAccount"
+sphincs_initcode=$(geas_bin SphincsFrameAccount.ctor.eas)
+sphincs_runtime=$(geas_bin SphincsFrameAccount.eas)
+
 # the ABI is embedded as a Go string literal
 token_abi_go=$(jq -c . <<<"$token_abi" | sed 's/\\/\\\\/g; s/"/\\"/g')
 
@@ -68,6 +73,14 @@ const ForsFrameAccountInitcodeHex = "0x${account_initcode}"
 
 // ForsFrameAccountRuntimeHex is the runtime the constructor installs (ForsFrameAccount.eas).
 const ForsFrameAccountRuntimeHex = "0x${account_runtime}"
+
+// SphincsFrameAccountInitcodeHex is SphincsFrameAccount.ctor.eas assembled with geas
+// ${GEAS_VERSION}. Append bytes32(PK.seed || PK.root) to deploy.
+const SphincsFrameAccountInitcodeHex = "0x${sphincs_initcode}"
+
+// SphincsFrameAccountRuntimeHex is the runtime the constructor installs
+// (SphincsFrameAccount.eas).
+const SphincsFrameAccountRuntimeHex = "0x${sphincs_runtime}"
 
 // ForsVerifierInitcodeHex is ForsVerifier.sol compiled with solc ${SOLC_VERSION}, via-ir,
 // optimizer 200 runs, evm cancun. Stateless; recover(bytes,bytes32) returns the signer.

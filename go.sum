@@ -64,8 +64,8 @@ github.com/ethereum/go-bigmodexpfix v0.0.0-20250911101455-f9e208c548ab h1:rvv6MJ
 github.com/ethereum/go-bigmodexpfix v0.0.0-20250911101455-f9e208c548ab/go.mod h1:IuLm4IsPipXKF7CW5Lzf68PIbZ5yl7FFd74l/E0o9A8=
 github.com/ethereum/go-ethereum v1.17.5 h1:o9BIXs2Q/3cPHVxw49n+Zjn2i6rB9TOXatev46duOC4=
 github.com/ethereum/go-ethereum v1.17.5/go.mod h1:vz2YvG7RewA4sFHTgzLyW+WmFG1N4jfk/hgXQVhhn9c=
-github.com/ethpandaops/spamoor v1.2.5-0.20261019100546-9edb011b7cc8 h1:uEHvLRryB9qaav+8YAe1hKeZWfTmptQxe6l0EJgVETc=
-github.com/ethpandaops/spamoor v1.2.5-0.20261019100546-9edb011b7cc8/go.mod h1:5Ao5i8PwU4CSXRNOH2olYqZyCE8MnyLSJsfxnaVR31s=
+github.com/ethpandaops/spamoor v1.2.5-0.20261119130903-2015733cf45c h1:6Yk3yVDd3WmoDMrGxW9jEuqdqtpbVlwAaa1e4hHvK54=
+github.com/ethpandaops/spamoor v1.2.5-0.20261119130903-2015733cf45c/go.mod h1:ldAhl1VBLOwSDy74yT2TwmzTqRy3uGXLnlNsLXh0cNQ=
 github.com/ferranbt/fastssz v0.1.4 h1:OCDB+dYDEQDvAgtAGnTSidK1Pe2tW3nFV40XyMkTeDY=
 github.com/ferranbt/fastssz v0.1.4/go.mod h1:Ea3+oeoRGGLGm5shYAeDgu6PGUlcvQhE2fILyD9+tGg=
 github.com/fjl/geas v0.3.3 h1:CtVkRXysF+1gf1L0MgisG4vcr/Zv/uf8ukq/uqiUEUs=

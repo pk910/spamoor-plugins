@@ -2,11 +2,11 @@
 // plugins from source through Yaegi and resolves these import paths itself.
 module github.com/ethpandaops/spamoor/plugins
 
-go 1.26.0
+go 1.26.10
 
 require (
 	github.com/ethereum/go-ethereum v1.17.5
-	github.com/ethpandaops/spamoor v1.2.5-0.20261019100546-9edb011b7cc8
+	github.com/ethpandaops/spamoor v1.2.5-0.20261119130903-2015733cf45c
 	github.com/holiman/uint256 v1.3.2
 	github.com/sirupsen/logrus v1.10.2
 	github.com/spf13/pflag v1.0.10

@@ -1,0 +1,120 @@
+;;; SphincsFrameAccount — EIP-8141 frame account authenticated with an EIP-8288
+;;; leanSPHINCS dependency.
+;;;
+;;; The account owns one stateless, many-time SPHINCS key. It never verifies a signature
+;;; itself: the transaction declares the signature as a dependency, and the block's
+;;; recursive STARK proves that it exists. Every frame transaction must be shaped as
+;;;
+;;;     frame 0: DEP_VERIFY  data = 0x10 || bytes32(0) || PK.seed || PK.root
+;;;     frame n: VERIFY      flags=3  target=<this>  data=""     <- self_verify
+;;;     ...                                                      <- user operations
+;;;
+;;; A zero data_hash stands for the signature hash of the containing transaction
+;;; (EIP-8288), so the dependency is a signature of this key over this very transaction
+;;; and nothing but the key has to be compared. The VERIFY frame checks that frame 0
+;;; declares exactly that one dependency and APPROVEs execution and payment.
+;;;
+;;; Storage (one slot, forever):
+;;;     slot 0     PK.seed || PK.root
+;;;
+;;; Any call whose caller is not ENTRY_POINT (0xaa) is a plain call and simply succeeds, so
+;;; value transfers to the account work.
+
+#pragma target "prague"
+
+#define ENTRY_POINT = 0xaa
+#define SLOT_KEY = 0
+#define DEP_FRAME = 0
+#define DEP_TRIPLE_LEN = 96
+#define LEANSPHINCS_SCHEME = 0x10
+
+;; EIP-8141 introspection parameters.
+#define TXP_CURRENT_FRAME = 0x0a
+#define FP_MODE = 0x02
+#define FP_DATA_LENGTH = 0x04
+#define MODE_VERIFY = 1
+#define MODE_DEP_VERIFY = 4
+#define APPROVE_EXECUTION_AND_PAYMENT = 3
+
+;; The frame opcodes are not known to geas yet, so they are emitted as raw bytes.
+#define %txparam(p) {           ; [] -> [value]
+    push $p
+    #bytes 0xb0
+}
+#define %frameparam(p) {        ; [frameIndex] -> [value]
+    push $p
+    swap1
+    #bytes 0xb3
+}
+#define %framedataload(off) {   ; [frameIndex] -> [word]
+    push $off
+    #bytes 0xb1
+}
+#define %approve(scope) {       ; [] -> exits
+    push $scope
+    push 0
+    push 0
+    #bytes 0xaa
+}
+
+    ;; dispatch on caller
+    caller                          ; [caller]
+    push ENTRY_POINT                ; [0xaa, caller]
+    eq                              ; [isFrame]
+    jumpi @frame_entry              ; []
+    stop                            ; plain call: accept (value transfers etc.)
+
+;;; ---------------------------------------------------------------------------
+;;; VERIFY frame (caller == ENTRY_POINT)
+;;; ---------------------------------------------------------------------------
+frame_entry:
+    %txparam(TXP_CURRENT_FRAME)     ; [cur]
+    %frameparam(FP_MODE)            ; [mode]
+    push MODE_VERIFY                ; [1, mode]
+    eq                              ; [ok]
+    iszero                          ; [!ok]
+    jumpi @fail                     ; []
+
+    ;; frame 0 must be a dependency frame declaring exactly one triple
+    push DEP_FRAME                  ; [0]
+    %frameparam(FP_MODE)            ; [mode]
+    push MODE_DEP_VERIFY            ; [4, mode]
+    eq                              ; [ok]
+    iszero                          ; [!ok]
+    jumpi @fail                     ; []
+
+    push DEP_FRAME                  ; [0]
+    %frameparam(FP_DATA_LENGTH)     ; [len]
+    push DEP_TRIPLE_LEN             ; [96, len]
+    eq                              ; [ok]
+    iszero                          ; [!ok]
+    jumpi @fail                     ; []
+
+    ;; scheme == leanSPHINCS
+    push DEP_FRAME                  ; [0]
+    %framedataload(0)               ; [scheme]
+    push LEANSPHINCS_SCHEME         ; [0x10, scheme]
+    eq                              ; [ok]
+    iszero                          ; [!ok]
+    jumpi @fail                     ; []
+
+    ;; data_hash == 0: the message is this transaction's signature hash
+    push DEP_FRAME                  ; [0]
+    %framedataload(32)              ; [dataHash]
+    jumpi @fail                     ; []
+
+    ;; verification key == the account's key
+    push DEP_FRAME                  ; [0]
+    %framedataload(64)              ; [key]
+    push SLOT_KEY                   ; [0, key]
+    sload                           ; [owner, key]
+    eq                              ; [ok]
+    iszero                          ; [!ok]
+    jumpi @fail                     ; []
+
+    %approve(APPROVE_EXECUTION_AND_PAYMENT)
+
+fail:
+    push 0
+    push 0
+    revert

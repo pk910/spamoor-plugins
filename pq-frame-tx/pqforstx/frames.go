@@ -127,9 +127,18 @@ func (s *Scenario) buildFrameTx(acct *account, op *operation, nonce uint64, feeC
 
 	frameTx := txtypes.NewFrameTxWithExtensions(s.extensions, uint256.MustFromBig(s.walletPool.GetChainId()), acct.address, nonce, fees, frames, signatures)
 
-	// The ARBITRARY witness is elided from the signature hash, so the hash of the
+	// max_fee is part of the signature hash. Signing a protocol-validated entry derives
+	// it, but an ARBITRARY entry is signed here, so the budget has to be fixed first.
+	if err := frameTx.DeriveMaxFee(); err != nil {
+		return nil, common.Hash{}, fmt.Errorf("derive max_fee: %w", err)
+	}
+
+	// The ARBITRARY witness is committed by its length only, so the hash of the
 	// placeholder transaction is the message to sign.
-	sigHash := frameTx.SigHash()
+	sigHash, err := frameTx.SigHash()
+	if err != nil {
+		return nil, common.Hash{}, fmt.Errorf("signature hash: %w", err)
+	}
 	witness := acct.current.Sign(sigHash)
 
 	recovered, err := fors.Recover(witness, sigHash)

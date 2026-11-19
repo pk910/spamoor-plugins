@@ -7,7 +7,7 @@ sources plus a `plugin.yaml`.
 
 | Plugin | Scenarios | Purpose |
 | --- | --- | --- |
-| [`pq-frame-tx`](pq-frame-tx/) | `pq-fors-tx` | EIP-8141 frame transactions from smart accounts authenticated with the post-quantum FORS+C signature scheme |
+| [`pq-frame-tx`](pq-frame-tx/) | `pq-fors-tx`, `pq-sphincs-tx` | EIP-8141 frame transactions from smart accounts authenticated with post-quantum signatures: FORS+C verified by a contract, and SPHINCS aggregated into the block's recursive STARK (EIP-8288) |
 
 ## Layout
 
@@ -24,7 +24,7 @@ work natively on the pure-Go parts. Spamoor itself never reads it.
 ```bash
 make plugins       # dist/<plugin>.tar.gz for every plugin
 make validate      # load each plugin through spamoor-utils validate-plugin
-make test          # native unit tests (e.g. the FORS+C signer against reference vectors)
+make test          # native unit tests (e.g. the signers against reference vectors)
 ```
 
 ## Run
